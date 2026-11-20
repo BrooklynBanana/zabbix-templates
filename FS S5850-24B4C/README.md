@@ -2,7 +2,7 @@
 
 Community-maintained monitoring template for the **FS S5850-24B4C** network switch. It combines proprietary SNMP OIDs with a *single* read-only SSH query to monitor hardware health in **Zabbix 7.4**.
 
-> **Compatibility:** Tested by the original contributor on **FS S5850-24B4C**, **FSOS 7.5.5**, **Zabbix 7.4**. Other FS switches, firmware releases and Zabbix versions are **not verified**. This is not an official FS.com template.
+> **Compatibility:** Tested by the original contributor on **FS S5850-24B4C**, **FSOS 7.5.5**, **Zabbix 7.4**. Also reported working on **FS S5850-48B8C** with **FSOS 7.4.8**. Other FS switches, firmware releases and Zabbix versions are **not verified**. This is not an official FS.com template.
 
 ## What is monitored
 
@@ -63,7 +63,7 @@ High temperature triggers apply below the Disaster threshold, so they do not sta
 
 The SSH item runs **one** `show environment` command. JavaScript preprocessing parses fan, PSU and sensor sections into JSON, then dependent items extract individual measurements. The parser expects the tested model's hardware arrangement: **eight fan entries, two PSUs, two temperature sensor indexes**. Missing fan or PSU entries count as faults; missing sensor indexes have their own alert. If a section heading disappears entirely (for example after an incompatible firmware update), preprocessing fails and the `nodata()` check warns of missing monitoring data instead of treating unexpected output as healthy.
 
-A missing PSU watt reading is represented as `null`. The power measurement item may temporarily become unsupported, but **PSU failure status is reported independently**. Network, SSH and user privilege configurations can affect data availability. The CPU sampling window labels have not been verified against the vendor MIB. This template has not been tested with other S5850 models or FSOS releases.
+A missing PSU watt reading is represented as `null`. The power measurement item may temporarily become unsupported, but **PSU failure status is reported independently**. Network, SSH and user privilege configurations can affect data availability. The CPU sampling window labels have not been verified against the vendor MIB. The S5850-48B8C on FSOS 7.4.8 prints the same `show environment` layout (eight fan entries, two PSUs, two sensors) and the same temperature limits. Beyond these two combinations, other S5850 models and FSOS releases have not been tested.
 
 ## Security
 
@@ -84,7 +84,7 @@ The included test fixture is **synthetic** and contains no real switch identifie
 
 ## Development and AI assistance
 
-This project was developed with assistance from **OpenAI ChatGPT**, including analysis of SNMP OIDs, template design, JavaScript preprocessing, documentation, and regression tests. The original contributor configured and tested the monitoring setup on a physical FS S5850-24B4C running FSOS 7.5.5 with Zabbix 7.4.
+This project was developed with assistance from **OpenAI ChatGPT**, including analysis of SNMP OIDs, template design, JavaScript preprocessing, documentation, and regression tests. The original contributor configured and tested the monitoring setup on a physical FS S5850-24B4C running FSOS 7.5.5 with Zabbix 7.4. The template was later also put into service on FS S5850-48B8C switches running FSOS 7.4.8.
 
 The improved parser in this repository has been validated with synthetic tests but has **not yet been retested against the physical switch**. All AI-assisted contributions should be reviewed and tested in the target environment before production use. This is an independent community project, not an official product of or endorsed by FS.com, Zabbix, or OpenAI.
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.1] - 2026-11-20
+
+- Documentation only: also reported working on FS S5850-48B8C with FSOS 7.4.8, which prints the same `show environment` layout and temperature limits. No functional change; item keys and UUIDs are unchanged.
+
 ## [0.1.0] - 2026-10-08
 
 Initial community release candidate for Zabbix 7.4 and FS S5850-24B4C (FSOS 7.5.5).
