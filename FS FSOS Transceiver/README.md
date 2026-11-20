@@ -2,7 +2,7 @@
 
 Community-maintained template that records the **optical receive and transmit power of every lane** of every transceiver on FS switches running FSOS, and alerts when one lane of a multi-lane link is weaker than the others. Everything comes from **one SNMP walk**; no SSH.
 
-> **Compatibility:** Running on **Zabbix 7.4** against **FS S5850-48B8C**, **FSOS 7.4.8**, with **100GBASE-SR4** modules. Confirmed live: import, the SNMP walk including the base-OID macro, discovery, the per-lane items and the Average lane-deviation trigger. The Warning, laser-bias and replacement triggers have not fired in practice yet. Other models, firmware releases and module types are not verified. This is not an official FS.com template.
+> **Compatibility:** Running on **Zabbix 7.4.14** against **FS S5850-48B8C**, **FSOS 7.4.8**, with **100GBASE-SR4** modules. Confirmed live: import, the SNMP walk including the base-OID macro, discovery, the per-lane items and the Average lane-deviation trigger. The Warning, laser-bias and replacement triggers have not fired in practice yet. Other models, firmware releases and module types are not verified. This is not an official FS.com template.
 
 ## Why
 

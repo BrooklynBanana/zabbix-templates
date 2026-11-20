@@ -2,7 +2,9 @@
 
 Community-maintained monitoring template for the **FS S5850-24B4C** network switch. It combines proprietary SNMP OIDs with a *single* read-only SSH query to monitor hardware health in **Zabbix 7.4**.
 
-> **Compatibility:** Tested by the original contributor on **FS S5850-24B4C**, **FSOS 7.5.5**, **Zabbix 7.4**. Also reported working on **FS S5850-48B8C** with **FSOS 7.4.8**. Other FS switches, firmware releases and Zabbix versions are **not verified**. This is not an official FS.com template.
+> **Compatibility:** Tested by the original contributor on **FS S5850-24B4C**, **FSOS 7.5.5**, **Zabbix 7.4**. Also in service on **FS S5850-48B8C** with **FSOS 7.4.8** (Zabbix 7.4.14), and one installation runs it on **Zabbix 8.0.0** without unsupported items. Other FS switches, firmware releases and Zabbix versions are **not verified**. This is not an official FS.com template.
+
+> **Security notice (2026-11-20):** On FS S5850-48B8C with FSOS 7.4.8, user privilege level 1 did **not** restrict commands passed on the SSH command line. The monitoring account could print the running configuration and enter configuration mode that way. Until you have tested your own firmware, treat the monitoring account's password like an administrator password. Details: [The monitoring account is not read-only](#the-monitoring-account-is-not-read-only).
 
 ## What is monitored
 
@@ -25,7 +27,7 @@ The template **does not** provide network-interface discovery. Assign **Network 
 
 1. Ensure that your Zabbix server (or the host's assigned proxy) can reach the switch's management address on **UDP 161** (SNMP) and **TCP 22** (SSH). The Zabbix server/proxy must support SSH checks.
 2. Enable SNMP on the switch and configure the appropriate **SNMP interface** and credentials on the Zabbix host. Consider SNMPv3 where supported.
-3. Create a **dedicated monitoring-only SSH user** with the least privilege that permits `show environment`. On the tested FSOS 7.5.5 device, the command worked at user privilege level **1**. **Verify separately** that your monitoring user cannot enter configuration mode or run write commands; privileges may differ by firmware.
+3. Create a **dedicated SSH user for monitoring**, separate from any personal or administrator login. `show environment` works at user privilege level **1** (FSOS 7.5.5 and 7.4.8). **Do not assume that this makes the account read-only:** see [The monitoring account is not read-only](#the-monitoring-account-is-not-read-only) and run the test there on your firmware. The commands are in [Creating the monitoring user](#creating-the-monitoring-user).
 4. Confirm non-interactive SSH works from the monitoring server or proxy:
    ```sh
    ssh -T zabbix-mon@SWITCH_IP 'show environment'
@@ -37,12 +39,56 @@ The template **does not** provide network-interface discovery. Assign **Network 
    | Macro | Value | Zabbix macro type |
    | --- | --- | --- |
    | `{$FS.SSH.IP}` | Switch management IP address | Text |
-   | `{$FS.SSH.USER}` | Dedicated read-only monitoring login | Text |
+   | `{$FS.SSH.USER}` | Dedicated monitoring login | Text |
    | `{$FS.SSH.PASSWORD}` | That user's SSH password | **Secret text** |
 
 8. Open **Monitoring → Latest data** and check the `FS: Environment raw data` item. It should contain JSON after the SSH item has run; its dependent hardware items should also populate. SSH polling runs every **5 minutes**. The firmware item polls hourly.
 
 **Upgrading an existing installation:** The template's technical name, item keys and original UUIDs are preserved so Zabbix can update an existing import of this template. The display name changes. Import with **Update existing** and **Create new**. Do **not** select **Delete missing** if your template includes locally added items you wish to retain. Verify the new temperature-sensor health item after upgrading.
+
+## Creating the monitoring user
+
+These commands create a dedicated login at privilege level 1 that may only log in by SSH. They were used on FS S5850-48B8C switches running FSOS 7.4.8; syntax may differ on other releases. Replace `<secret>` with a long random password that is used nowhere else, and keep it only in the `{$FS.SSH.PASSWORD}` macro.
+
+```
+configure terminal
+username zabbix-mon
+username zabbix-mon secret <secret>
+username zabbix-mon privilege 1
+username zabbix-mon service-type ssh
+end
+write
+```
+
+- `secret` rather than `password` is intended to keep the password out of the configuration in readable form. Confirm with an administrator login how your firmware stores it (`show running-config | include username`).
+- `service-type ssh` restricts the account to SSH logins.
+- `write` saves the account to the startup configuration; without it the user is gone after a reboot.
+
+Then check from the Zabbix server or proxy that `ssh -T zabbix-mon@SWITCH_IP 'show environment'` prints the fan, power and sensor tables without a prompt or paging, and set `{$FS.SSH.USER}` to `zabbix-mon` on the host.
+
+## The monitoring account is not read-only
+
+**Observed on FS S5850-48B8C, FSOS 7.4.8, on 2026-11-20**, with the account created as shown above:
+
+| How the command is given | `show running-config` | `configure terminal` |
+| --- | --- | --- |
+| Typed in an interactive login | refused | refused |
+| Passed on the SSH command line, e.g. `ssh -T zabbix-mon@SWITCH_IP 'show running-config'` | **prints the running configuration** | **answers `Enter configuration commands, one per line.`** |
+
+Privilege level 1 was therefore enforced in the interactive session only. Whether a change can be completed and saved through the second path was not tested, and it is not known whether this is intended behaviour or a defect. The S5850-24B4C with FSOS 7.5.5 has not been retested for this.
+
+What follows from it:
+
+- Anyone who knows the monitoring password, or who can read or use the `{$FS.SSH.PASSWORD}` macro in Zabbix, should be assumed to have administrator-equivalent access to the switch. The running configuration may also reveal other credentials.
+- Testing the account in an interactive login is **not** sufficient. Run both commands from the table on the SSH command line against your own firmware. If either one succeeds, the restriction does not hold on that path.
+
+If it does not hold on your firmware:
+
+1. Restrict SSH on the switch to the Zabbix server or proxy and your administration hosts, by management ACL or firewall. Include your own administration networks before applying such a rule, or you will lock yourself out.
+2. Use a long random password that exists only in a **Secret text** macro or a secrets vault, and review who can administer hosts, items and scripts in Zabbix.
+3. Make sure the other accounts and credentials in the switch configuration are not stored in readable form.
+4. Ask the vendor whether a newer release enforces privilege levels for commands passed on the SSH command line.
+5. If the remaining risk is not acceptable, do not create the account. Disable the SSH item and the triggers that depend on it; the SNMP items for CPU, memory and firmware keep working without it.
 
 ## Triggers
 
@@ -67,7 +113,7 @@ A missing PSU watt reading is represented as `null`. The power measurement item 
 
 ## Security
 
-- Create a **dedicated, least-privilege SSH account**. Restrict SSH access to the Zabbix server/proxy by management ACL or firewall. Do not use a general administrator account for monitoring.
+- Create a **dedicated SSH account** at privilege level 1 and do not use a personal or general administrator account for monitoring. On FSOS 7.4.8 the privilege level did not restrict commands passed on the SSH command line, so the account must be treated as administrator-equivalent until tested otherwise: see [The monitoring account is not read-only](#the-monitoring-account-is-not-read-only). Restrict SSH access to the Zabbix server/proxy and your administration hosts by management ACL or firewall.
 - Use a **Secret text** macro or an approved external secret-management integration. A masked Zabbix macro is not equivalent to an independent secrets vault; review who can administer Zabbix hosts and items.
 - The published XML contains **only macro references**, not device passwords, SNMP community strings, or infrastructure addresses.
 - **Do not publish raw SNMP walks, configuration backups, or unredacted screenshots**, which can expose serial numbers, interface descriptions, filenames or your network layout.
@@ -86,7 +132,7 @@ The included test fixture is **synthetic** and contains no real switch identifie
 
 This project was developed with assistance from **OpenAI ChatGPT**, including analysis of SNMP OIDs, template design, JavaScript preprocessing, documentation, and regression tests. The original contributor configured and tested the monitoring setup on a physical FS S5850-24B4C running FSOS 7.5.5 with Zabbix 7.4. The template was later also put into service on FS S5850-48B8C switches running FSOS 7.4.8.
 
-The improved parser in this repository has been validated with synthetic tests but has **not yet been retested against the physical switch**. All AI-assisted contributions should be reviewed and tested in the target environment before production use. This is an independent community project, not an official product of or endorsed by FS.com, Zabbix, or OpenAI.
+The improved parser in this repository is covered by synthetic tests and has since been run live on FS S5850-48B8C switches (FSOS 7.4.8, Zabbix 7.4.14), imported from this repository's XML. A retest on the S5850-24B4C itself, on which the original parser was tested, is still outstanding. All AI-assisted contributions should be reviewed and tested in the target environment before production use. This is an independent community project, not an official product of or endorsed by FS.com, Zabbix, or OpenAI.
 
 ## License
 
