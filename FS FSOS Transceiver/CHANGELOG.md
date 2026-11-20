@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.1] - 2026-11-20
+
+- Documentation only: 0.2.0 has been imported into Zabbix 7.4 and runs against FS S5850-48B8C switches on FSOS 7.4.8. Import, SNMP walk with the base-OID macro, discovery, per-lane items and the Average lane-deviation trigger are confirmed live. No functional change.
+
 ## [0.2.0] - 2026-11-20
 
 - **Fix:** DAC and copper ports report `0.00` for every reading. They were discovered as optical ports with 0 dBm. Discovery now uses the diagnostics flag (column `1.1.13`) and skips all-zero rows when the flag is absent.

@@ -6,8 +6,8 @@ Community-maintained Zabbix templates for network and IT infrastructure. Each de
 
 | Device | Tested with | Monitoring | Project |
 | --- | --- | --- | --- |
-| **FS S5850-24B4C** | Zabbix 7.4; FSOS 7.5.5 | SNMP CPU, memory, firmware; SSH fan, PSU and temperature health | [Documentation and files](FS%20S5850-24B4C/README.md) |
-| **FS FSOS switches: transceiver optics** | Built for Zabbix 7.4, not yet test-imported; value format verified on S5850-48B8C, FSOS 7.4.8 | SNMP per-lane RX/TX power and laser bias, alerts when one lane is weaker than the others, transceiver replacement notice | [Documentation and files](FS%20FSOS%20Transceiver/README.md) |
+| **FS S5850-24B4C** | Zabbix 7.4; S5850-24B4C with FSOS 7.5.5, S5850-48B8C with FSOS 7.4.8 | SNMP CPU, memory, firmware; SSH fan, PSU and temperature health | [Documentation and files](FS%20S5850-24B4C/README.md) |
+| **FS FSOS switches: transceiver optics** | Zabbix 7.4; S5850-48B8C with FSOS 7.4.8 | SNMP per-lane RX/TX power and laser bias, alerts when one lane is weaker than the others, transceiver replacement notice | [Documentation and files](FS%20FSOS%20Transceiver/README.md) |
 | **Sophos XGS 138, 2100, 3300** | Zabbix 7.4; SFOS 22.0 / 22.0.1 MR-1 | Standalone SNMPv3 monitoring: CPU/resources, interfaces, IPsec VPN, HA, services and licenses | [Documentation and files](Sophos%20XGS/README.md) |
 
 ## Notes
