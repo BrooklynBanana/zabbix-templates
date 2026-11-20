@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.3] - 2026-11-20
+
+Documentation only, from further tests on FS S5850-48B8C with FSOS 7.4.8. No functional change.
+
+- A privilege-level-1 account has no `show` command in an interactive login. The SSH check therefore works only because the privilege level is not enforced for commands passed on the SSH command line; if a firmware release enforces it there, the account will presumably need level 2.
+- `username NAME secret ...` is stored as `password 8 <hash>`. On an existing account it removed the `privilege` line, so the level must be set again afterwards.
+- References to the vendor documentation of the privilege levels and of `access-class` on `line vty`.
+- New README section with an SNMPv3 example (authPriv, read-only view, source ACL).
+
 ## [0.1.2] - 2026-11-20
 
 - Documentation only: the improved parser has been run live on FS S5850-48B8C (FSOS 7.4.8, Zabbix 7.4.14), imported from this repository's XML. One installation runs the template on Zabbix 8.0.0. A retest on the S5850-24B4C itself is still outstanding. No functional change.
