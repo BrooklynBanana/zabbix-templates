@@ -4,7 +4,7 @@ Community-maintained monitoring template for the **FS S5850-24B4C** network swit
 
 > **Compatibility:** Tested by the original contributor on **FS S5850-24B4C**, **FSOS 7.5.5**, **Zabbix 7.4**. Also in service on **FS S5850-48B8C** with **FSOS 7.4.8** (Zabbix 7.4.14), and one installation runs it on **Zabbix 8.0.0** without unsupported items. Other FS switches, firmware releases and Zabbix versions are **not verified**. This is not an official FS.com template.
 
-> **Security notice (2026-11-20):** On FS S5850-48B8C with FSOS 7.4.8, user privilege level 1 did **not** restrict commands passed on the SSH command line. The monitoring account could print the running configuration and enter configuration mode that way. Until you have tested your own firmware, treat the monitoring account's password like an administrator password. Details: [The monitoring account is not read-only](#the-monitoring-account-is-not-read-only).
+> **Security notice (2026-11-20):** On FS S5850-48B8C with FSOS 7.4.8, user privilege level 1 did **not** restrict commands passed on the SSH command line. The monitoring account could print the running configuration and enter configuration mode that way, and the SSH check itself only works because of this. Until you have tested your own firmware, treat the monitoring account's password like an administrator password. Details: [The monitoring account is not read-only](#the-monitoring-account-is-not-read-only).
 
 ## What is monitored
 
@@ -26,8 +26,8 @@ The template **does not** provide network-interface discovery. Assign **Network 
 ## Installation
 
 1. Ensure that your Zabbix server (or the host's assigned proxy) can reach the switch's management address on **UDP 161** (SNMP) and **TCP 22** (SSH). The Zabbix server/proxy must support SSH checks.
-2. Enable SNMP on the switch and configure the appropriate **SNMP interface** and credentials on the Zabbix host. Consider SNMPv3 where supported.
-3. Create a **dedicated SSH user for monitoring**, separate from any personal or administrator login. `show environment` works at user privilege level **1** (FSOS 7.5.5 and 7.4.8). **Do not assume that this makes the account read-only:** see [The monitoring account is not read-only](#the-monitoring-account-is-not-read-only) and run the test there on your firmware. The commands are in [Creating the monitoring user](#creating-the-monitoring-user).
+2. Enable SNMP on the switch and configure the appropriate **SNMP interface** and credentials on the Zabbix host. Use SNMPv3 with authentication and privacy where supported; see [SNMP access on the switch](#snmp-access-on-the-switch).
+3. Create a **dedicated SSH user for monitoring**, separate from any personal or administrator login. The SSH check works with an account at user privilege level **1** (FSOS 7.5.5 and 7.4.8). **Do not assume that this makes the account read-only:** see [The monitoring account is not read-only](#the-monitoring-account-is-not-read-only) and run the test there on your firmware. The commands are in [Creating the monitoring user](#creating-the-monitoring-user).
 4. Confirm non-interactive SSH works from the monitoring server or proxy:
    ```sh
    ssh -T zabbix-mon@SWITCH_IP 'show environment'
@@ -60,7 +60,9 @@ end
 write
 ```
 
-- `secret` rather than `password` is intended to keep the password out of the configuration in readable form. Confirm with an administrator login how your firmware stores it (`show running-config | include username`).
+- `secret` keeps the password out of the configuration in readable form. On FSOS 7.4.8 the account then appears as `username zabbix-mon password 8 <hash>`. Confirm with an administrator login how your firmware stores it (`show running-config | include username`).
+- Privilege level 1 is the default and is not shown in the running configuration, so there is no `privilege` line for this account.
+- **Do not copy the `secret` line to an existing administrator account without the next step.** On FSOS 7.4.8, `username NAME secret ...` on an existing account removed that account's `privilege` line, which leaves it at the default level. Enter `username NAME privilege <level>` again straight afterwards, check both lines with `show running-config | include username`, and confirm a fresh login in a second session before you close the current one or run `write`.
 - `service-type ssh` restricts the account to SSH logins.
 - `write` saves the account to the startup configuration; without it the user is gone after a reboot.
 
@@ -70,25 +72,56 @@ Then check from the Zabbix server or proxy that `ssh -T zabbix-mon@SWITCH_IP 'sh
 
 **Observed on FS S5850-48B8C, FSOS 7.4.8, on 2026-11-20**, with the account created as shown above:
 
-| How the command is given | `show running-config` | `configure terminal` |
-| --- | --- | --- |
-| Typed in an interactive login | refused | refused |
-| Passed on the SSH command line, e.g. `ssh -T zabbix-mon@SWITCH_IP 'show running-config'` | **prints the running configuration** | **answers `Enter configuration commands, one per line.`** |
+| How the command is given | `show environment` | `show running-config` | `configure terminal` |
+| --- | --- | --- | --- |
+| Typed in an interactive login | **not available** | not available | not available |
+| Passed on the SSH command line, e.g. `ssh -T zabbix-mon@SWITCH_IP 'show running-config'` | prints the tables | **prints the running configuration** | **answers `Enter configuration commands, one per line.`** |
 
-Privilege level 1 was therefore enforced in the interactive session only. Whether a change can be completed and saved through the second path was not tested, and it is not known whether this is intended behaviour or a defect. The S5850-24B4C with FSOS 7.5.5 has not been retested for this.
+In the interactive login the account has no `show` command at all. Its command list consists of `cd`, `dir`, `disable`, `enable`, `ethernet`, `exit`, `help`, `logout`, `ls`, `md5sum`, `no`, `ping`, `pwd`, `quit`, `ssh`, `telnet`, `terminal` and `traceroute`. `enable` answered `% No password has been assigned yet` because no enable password was configured; what happens when one is configured was not tested.
+
+This matches the vendor's description of the levels in the [FSOS Basic Configuration Guide for the S5800 series](https://img-en.fs.com/file/user_manual/s5800-series-basic-configuration.pdf): level 1 has only basic commands, level 2 adds all `show` commands, level 3 adds configuration commands and level 4 has everything. The S5850 CLI reference gives the syntax `username WORD privilege <1-4>` without describing the levels. Neither document mentions commands passed on the SSH command line.
+
+Two things follow from the table:
+
+- Privilege level 1 was enforced in the interactive session only. For a command passed on the SSH command line, the behaviour contradicts the vendor documentation.
+- **The SSH check of this template depends on that behaviour.** A level 1 account cannot run `show environment` interactively. If a firmware release enforces the privilege level on the SSH command line as well, the check will stop returning data with a level 1 account and will presumably need level 2. That has not been tested.
+
+Whether a change can be completed and saved through the SSH command line was not tested, and it is not known whether this is intended behaviour or a defect. The S5850-24B4C with FSOS 7.5.5 has not been retested for this.
 
 What follows from it:
 
 - Anyone who knows the monitoring password, or who can read or use the `{$FS.SSH.PASSWORD}` macro in Zabbix, should be assumed to have administrator-equivalent access to the switch. The running configuration may also reveal other credentials.
-- Testing the account in an interactive login is **not** sufficient. Run both commands from the table on the SSH command line against your own firmware. If either one succeeds, the restriction does not hold on that path.
+- Testing the account in an interactive login is **not** sufficient. Run `show running-config` and `configure terminal` on the SSH command line against your own firmware. If either one succeeds, the restriction does not hold on that path.
 
 If it does not hold on your firmware:
 
-1. Restrict SSH on the switch to the Zabbix server or proxy and your administration hosts, by management ACL or firewall. Include your own administration networks before applying such a rule, or you will lock yourself out.
+1. Restrict SSH on the switch to the Zabbix server or proxy and your administration hosts, by management ACL or firewall. The S5850 CLI reference documents `access-class ACL-NAME in` under `line vty` for this and states that only IP address and port of the ACL are evaluated there; this has not been tested here. Include your own administration networks before applying such a rule, or you will lock yourself out. The measure only helps if administration comes from a limited set of addresses.
 2. Use a long random password that exists only in a **Secret text** macro or a secrets vault, and review who can administer hosts, items and scripts in Zabbix.
-3. Make sure the other accounts and credentials in the switch configuration are not stored in readable form.
+3. Make sure the other accounts and credentials in the switch configuration are not stored in readable form. For local accounts see the note on `secret` and the `privilege` line in [Creating the monitoring user](#creating-the-monitoring-user).
 4. Ask the vendor whether a newer release enforces privilege levels for commands passed on the SSH command line.
 5. If the remaining risk is not acceptable, do not create the account. Disable the SSH item and the triggers that depend on it; the SNMP items for CPU, memory and firmware keep working without it.
+
+## SNMP access on the switch
+
+The SNMP part of the template needs read access only. The following lines show an SNMPv3 setup as it appears in a running configuration on FSOS 7.5.5, with names and values replaced. Check each command with `?` on your release.
+
+```
+snmp-server enable
+snmp-server version v3
+snmp-server view MON_RO included .1
+snmp-server usm-user monuser authentication sha <auth-password> privacy aes <priv-password>
+snmp-server group MON_GRP user monuser security-model usm
+snmp-server access MON_GRP security-model usm priv read MON_RO
+ip access-list MON_SNMP
+ 10 permit any host <ZABBIX_IP> any
+ 20 deny any any any
+snmp-server access-group MON_SNMP in
+```
+
+- Use `priv` in the `snmp-server access` line. `noauth` is the lowest SNMPv3 security level and should not be used for a monitoring group.
+- Prefer `sha` and `aes` over `md5` and `des`.
+- `snmp-server access-group` limits SNMP to the listed source addresses.
+- On the Zabbix host interface this corresponds to SNMPv3 with security level **authPriv**.
 
 ## Triggers
 
