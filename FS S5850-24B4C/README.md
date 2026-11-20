@@ -25,7 +25,7 @@ The template **does not** provide network-interface discovery. Assign **Network 
 
 1. Ensure that your Zabbix server (or the host's assigned proxy) can reach the switch's management address on **UDP 161** (SNMP) and **TCP 22** (SSH). The Zabbix server/proxy must support SSH checks.
 2. Enable SNMP on the switch and configure the appropriate **SNMP interface** and credentials on the Zabbix host. Consider SNMPv3 where supported.
-3. Create a **dedicated monitoring-only SSH user** with the least privilege that permits `show environment`. On the tested FSOS 7.5.5 device, the command worked at user privilege level **1**. **Verify separately** that your monitoring user cannot enter configuration mode or run write commands; privileges may differ by firmware.
+3. Create a **dedicated monitoring-only SSH user** with the least privilege that permits `show environment`. On the tested FSOS 7.5.5 device, the command worked at user privilege level **1**. **Verify separately** that your monitoring user cannot enter configuration mode or run write commands; privileges may differ by firmware. See [Creating the monitoring user](#creating-the-monitoring-user) for the commands.
 4. Confirm non-interactive SSH works from the monitoring server or proxy:
    ```sh
    ssh -T zabbix-mon@SWITCH_IP 'show environment'
@@ -43,6 +43,30 @@ The template **does not** provide network-interface discovery. Assign **Network 
 8. Open **Monitoring → Latest data** and check the `FS: Environment raw data` item. It should contain JSON after the SSH item has run; its dependent hardware items should also populate. SSH polling runs every **5 minutes**. The firmware item polls hourly.
 
 **Upgrading an existing installation:** The template's technical name, item keys and original UUIDs are preserved so Zabbix can update an existing import of this template. The display name changes. Import with **Update existing** and **Create new**. Do **not** select **Delete missing** if your template includes locally added items you wish to retain. Verify the new temperature-sensor health item after upgrading.
+
+## Creating the monitoring user
+
+These commands create a login that is limited to privilege level 1 and to SSH. They were used on FS S5850-48B8C switches running FSOS 7.4.8; syntax may differ on other releases. Replace `<secret>` with a long random password and keep it only in the `{$FS.SSH.PASSWORD}` macro.
+
+```
+configure terminal
+username zabbix-mon
+username zabbix-mon secret <secret>
+username zabbix-mon privilege 1
+username zabbix-mon service-type ssh
+end
+write
+```
+
+- `secret` rather than `password` is used so that the password is not kept readable in the configuration. Look at the `username` lines of `show running-config` to confirm how your firmware stores it.
+- `service-type ssh` restricts the account to SSH logins.
+- `write` saves the account to the startup configuration; without it the user is gone after a reboot.
+
+Then check from the Zabbix server or proxy, not from your workstation:
+
+1. `ssh -T zabbix-mon@SWITCH_IP 'show environment'` prints the fan, power and sensor tables without a prompt or paging.
+2. `ssh -T zabbix-mon@SWITCH_IP 'configure terminal'` is refused. If it is not, the account has more rights than monitoring needs.
+3. Set `{$FS.SSH.USER}` to `zabbix-mon` on the host.
 
 ## Triggers
 
