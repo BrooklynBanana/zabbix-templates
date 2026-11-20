@@ -1,0 +1,25 @@
+# Zabbix YAML and SNMP preprocessing regression tests for the FS FSOS transceiver template
+name: Validate FS FSOS Transceiver template
+on:
+  push:
+    paths:
+      - 'FS FSOS Transceiver/**'
+      - '.github/workflows/validate-fs-transceiver.yml'
+  pull_request:
+    paths:
+      - 'FS FSOS Transceiver/**'
+      - '.github/workflows/validate-fs-transceiver.yml'
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+      - name: Check YAML and template structure
+        run: python3 'FS FSOS Transceiver/tests/validate.py'
+      - name: Run SNMP parser regression tests
+        run: node 'FS FSOS Transceiver/tests/test_parser.js'

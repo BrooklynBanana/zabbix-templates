@@ -1,0 +1,575 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+  - uuid: 7df96b18c230490a982d6e09f58547f3
+    name: Templates/Network devices
+  templates:
+  - uuid: f2c0b83339334ea5a8025d670f4609b1
+    template: FS FSOS Transceiver
+    name: FS FSOS transceiver optics by SNMP
+    description: 'Community template for per-lane optical levels of transceivers on FS switches running FSOS (verified: S5850-48B8C, FSOS 7.4.8, 100GBASE-SR4). One
+      SNMP walk of the transceiver tables below {$FS.XCVR.OID} feeds all items. Discovers optical ports and lanes, records RX/TX power and laser bias per lane and
+      alerts when one lane is weaker than the other lanes of the same port. Uses the SNMP interface of the host; no SSH. Use alongside Network Generic Device by SNMP.
+      Not an official FS template.'
+    vendor:
+      name: Community
+      version: 7.4-0.2.0
+    groups:
+    - name: Templates/Network devices
+    items:
+    - uuid: 8b6622b8325e41e48e51c1bb6adfc672
+      name: 'FS: Transceiver SNMP walk'
+      type: SNMP_AGENT
+      snmp_oid: walk[{$FS.XCVR.OID}.1.1.1,{$FS.XCVR.OID}.1.1.3,{$FS.XCVR.OID}.1.1.4,{$FS.XCVR.OID}.1.1.13,{$FS.XCVR.OID}.2.1.5,{$FS.XCVR.OID}.4.1.3,{$FS.XCVR.OID}.4.1.5,{$FS.XCVR.OID}.5.1.5,{$FS.XCVR.OID}.6.1.5,1.3.6.1.2.1.31.1.1.1.1,1.3.6.1.2.1.31.1.1.1.18]
+      key: fs.xcvr.walk
+      delay: 5m
+      history: '0'
+      value_type: TEXT
+      trends: '0'
+      description: Bulk walk of transceiver type, part number, serial number, diagnostics flag, temperature, bias (value and threshold), TX and RX power plus ifName/ifAlias.
+        Master item; not stored.
+      tags:
+      - tag: component
+        value: raw
+    - uuid: 2c4d5895f870421cb600c6ebd1110118
+      name: 'FS: Transceiver data'
+      type: DEPENDENT
+      key: fs.xcvr.json
+      delay: '0'
+      history: 1d
+      value_type: TEXT
+      trends: '0'
+      description: Parsed transceiver readings as JSON. Fails if the walk contains no transceiver rows, so missing data is not mistaken for healthy optics.
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - |-
+          // FSOS transceiver tables (FS-SWITCH-MIB "transinformation", <base>.37.1.10) from ONE SNMP walk.
+          // Value format verified on S5850-48B8C, FSOS 7.4.8: one string per port, one
+          // comma-separated reading per lane, e.g. "0.29  ,0.14  ,0.12  ,-3.52 ".
+          // Ports without diagnostics (DAC, copper modules) report 0.00 for every reading and
+          // 0 in column 1.13; they are skipped so that no fake 0 dBm values are recorded.
+          // Fail closed: a walk without any transceiver row is an error, not "healthy".
+          var COLS = {
+              '1.1': 'type', '1.3': 'pn', '1.4': 'sn', '1.13': 'ddm',
+              '2.5': 'temp', '4.3': 'bias_warn', '4.5': 'bias', '5.5': 'tx', '6.5': 'rx'
+          };
+          var raw = {};
+          var names = {};
+          var aliases = {};
+          var seen = false;
+
+          function clean(s) {
+              s = s.replace(/^\s+|\s+$/g, '');
+              var q = s.match(/^"([\s\S]*)"$/);
+              return (q ? q[1] : s).replace(/^\s+|\s+$/g, '');
+          }
+
+          // "a ,b ,c ,d " -> [a, b, c, d]; anything that is not a plain number becomes null.
+          function numbers(s) {
+              var out = [];
+              if (s === '') return out;
+              var parts = s.split(',');
+              for (var k = 0; k < parts.length; k++) {
+                  var p = parts[k].replace(/^\s+|\s+$/g, '');
+                  out.push(/^-?\d+(?:\.\d+)?$/.test(p) ? Number(p) : null);
+              }
+              return out;
+          }
+
+          function round2(x) {
+              return Math.round(x * 100) / 100;
+          }
+
+          // True when a list holds no reading other than zero.
+          function allZero(list) {
+              for (var z = 0; z < list.length; z++) {
+                  if (list[z] !== null && list[z] !== 0) return false;
+              }
+              return true;
+          }
+
+          var lines = value.replace(/\r/g, '').split('\n');
+          for (var i = 0; i < lines.length; i++) {
+              var m = lines[i].match(/^\s*\.?([0-9.]+)\s*=\s*(?:[A-Za-z][A-Za-z0-9-]*:\s*)?(.*)$/);
+              if (!m) continue;
+              var oid = m[1];
+              var val = clean(m[2]);
+              var t = oid.match(/\.37\.1\.10\.(\d+)\.1\.(\d+)\.(\d+)$/);
+              if (t) {
+                  seen = true;
+                  var col = COLS[t[1] + '.' + t[2]];
+                  if (col) {
+                      if (!raw[t[3]]) raw[t[3]] = {};
+                      raw[t[3]][col] = val;
+                  }
+                  continue;
+              }
+              var n = oid.match(/^1\.3\.6\.1\.2\.1\.31\.1\.1\.1\.(1|18)\.(\d+)$/);
+              if (n) {
+                  if (n[1] === '1') names[n[2]] = val; else aliases[n[2]] = val;
+              }
+          }
+          if (!seen) {
+              throw new Error('No transceiver rows in SNMP walk');
+          }
+
+          var data = {ports: {}, lld_ports: [], lld_multilane: [], lld_lanes: [], lld_bias: [], summary: {}};
+          var indexes = [];
+          for (var idx in raw) {
+              if (raw.hasOwnProperty(idx)) indexes.push(idx);
+          }
+          indexes.sort(function (a, b) { return Number(a) - Number(b); });
+
+          var laneCount = 0;
+          var biasCount = 0;
+          for (var j = 0; j < indexes.length; j++) {
+              var ifindex = indexes[j];
+              var r = raw[ifindex];
+              var rx = numbers(r.rx === undefined ? '' : r.rx);
+              var valid = [];
+              for (var l = 0; l < rx.length; l++) {
+                  if (rx[l] !== null) valid.push({lane: l + 1, v: rx[l]});
+              }
+              var tx = numbers(r.tx === undefined ? '' : r.tx);
+              var bias = numbers(r.bias === undefined ? '' : r.bias);
+              // Column 1.13 is 1 when the module provides diagnostics, 0 when it does not.
+              if (r.ddm === '0') continue;
+              // No numeric receive power: empty cage or unreadable module.
+              if (valid.length === 0) continue;
+              // Firmware without the flag column: all-zero rows are modules without diagnostics.
+              if (r.ddm !== '1' && allZero(rx) && allZero(tx) && allZero(bias)) continue;
+
+              var temps = numbers(r.temp === undefined ? '' : r.temp);
+              var temp = null;
+              for (var c = 0; c < temps.length; c++) {
+                  if (temps[c] !== null && (temp === null || temps[c] > temp)) temp = temps[c];
+              }
+
+              var port = {
+                  ifindex: Number(ifindex),
+                  name: names[ifindex] ? names[ifindex] : 'ifIndex' + ifindex,
+                  alias: aliases[ifindex] ? aliases[ifindex] : '',
+                  type: r.type === undefined ? '' : r.type,
+                  pn: r.pn === undefined ? '' : r.pn,
+                  sn: r.sn === undefined ? '' : r.sn,
+                  lanes: valid.length,
+                  rx: rx,
+                  tx: tx,
+                  bias: bias,
+                  bias_warn: null,
+                  temp: temp,
+                  rx_min: null,
+                  rx_weak_lane: null,
+                  rx_dev: null
+              };
+
+              // Weakest lane against the median of the remaining lanes. One lane that
+              // drops while its neighbours stay put is the signature of a damaged fibre.
+              var weak = valid[0];
+              for (var w = 1; w < valid.length; w++) {
+                  if (valid[w].v < weak.v) weak = valid[w];
+              }
+              port.rx_min = weak.v;
+              port.rx_weak_lane = weak.lane;
+              if (valid.length >= 2) {
+                  var others = [];
+                  for (var o = 0; o < valid.length; o++) {
+                      if (valid[o].lane !== weak.lane) others.push(valid[o].v);
+                  }
+                  others.sort(function (a, b) { return a - b; });
+                  var mid = Math.floor(others.length / 2);
+                  var median = others.length % 2 ? others[mid] : (others[mid - 1] + others[mid]) / 2;
+                  port.rx_dev = round2(median - weak.v);
+              }
+
+              data.ports[ifindex] = port;
+              var row = {
+                  '{#IFINDEX}': ifindex, '{#IFNAME}': port.name,
+                  '{#IFALIAS}': port.alias, '{#XCVR.TYPE}': port.type
+              };
+              data.lld_ports.push(row);
+              if (valid.length >= 2) data.lld_multilane.push(row);
+              for (var v = 0; v < valid.length; v++) {
+                  data.lld_lanes.push({
+                      '{#IFINDEX}': ifindex, '{#IFNAME}': port.name, '{#IFALIAS}': port.alias,
+                      '{#LANE}': String(valid[v].lane), '{#LANEIDX}': String(valid[v].lane - 1)
+                  });
+                  laneCount++;
+              }
+              // Laser bias is judged against the module's own high-warning threshold,
+              // because the normal current differs widely between module types.
+              var warn = numbers(r.bias_warn === undefined ? '' : r.bias_warn);
+              if (warn.length > 0 && warn[0] !== null && warn[0] > 0) {
+                  port.bias_warn = warn[0];
+                  for (var b = 0; b < bias.length; b++) {
+                      if (bias[b] === null) continue;
+                      data.lld_bias.push({
+                          '{#IFINDEX}': ifindex, '{#IFNAME}': port.name, '{#IFALIAS}': port.alias,
+                          '{#LANE}': String(b + 1), '{#LANEIDX}': String(b),
+                          '{#BIAS.HIGH.WARN}': String(warn[0])
+                      });
+                      biasCount++;
+                  }
+              }
+          }
+          data.summary = {
+              ports: data.lld_ports.length,
+              multilane_ports: data.lld_multilane.length,
+              lanes: laneCount,
+              bias_lanes: biasCount
+          };
+          return JSON.stringify(data);
+      master_item:
+        key: fs.xcvr.walk
+      tags:
+      - tag: component
+        value: raw
+    - uuid: 884708d5f61741fc84a347ec3ca41e9c
+      name: 'FS: Optical ports with diagnostics'
+      type: DEPENDENT
+      key: fs.xcvr.ports
+      delay: '0'
+      description: Number of ports whose transceiver reports a numeric receive power.
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.summary.ports
+      master_item:
+        key: fs.xcvr.json
+      tags:
+      - tag: component
+        value: transceiver
+      triggers:
+      - uuid: 7e4657708e2b40a18412c402c50c07a5
+        expression: nodata(/FS FSOS Transceiver/fs.xcvr.ports,30m)=1
+        name: 'FS: Transceiver monitoring has no data'
+        priority: WARNING
+        description: No transceiver data for 30 minutes. Check SNMP access and whether the transceiver tables exist below {$FS.XCVR.OID}.
+        tags:
+        - tag: scope
+          value: availability
+        - tag: component
+          value: monitoring
+    discovery_rules:
+    - uuid: a3d200615053480791980b13de1ce808
+      name: Optical lane discovery
+      type: DEPENDENT
+      key: fs.xcvr.lane.discovery
+      delay: '0'
+      filter:
+        evaltype: AND
+        conditions:
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.MATCHES}'
+          formulaid: A
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.NOT_MATCHES}'
+          operator: NOT_MATCHES_REGEX
+          formulaid: B
+      description: One entry per lane with a numeric receive power.
+      item_prototypes:
+      - uuid: cb7773372cc642fe887d40e48f7aa3a5
+        name: 'Interface {#IFNAME}({#IFALIAS}): Lane {#LANE} RX power'
+        type: DEPENDENT
+        key: fs.xcvr.rx[{#IFNAME},{#LANE}]
+        delay: '0'
+        value_type: FLOAT
+        units: dBm
+        description: Optical receive power of one lane as reported by the transceiver (DOM). Absolute accuracy of DOM readings is a few dB; compare lanes of the same
+          port.
+        tags:
+        - tag: component
+          value: transceiver
+        - tag: interface
+          value: '{#IFNAME}'
+        - tag: lane
+          value: '{#LANE}'
+        trigger_prototypes:
+        - uuid: 4b9c07f3fe714e14807909db5e3e7786
+          expression: max(/FS FSOS Transceiver/fs.xcvr.rx[{#IFNAME},{#LANE}],15m)<{$FS.XCVR.RX.LOW:"{#IFNAME}"}
+          name: 'Interface {#IFNAME}({#IFALIAS}): Lane {#LANE} RX power is low (below {$FS.XCVR.RX.LOW:"{#IFNAME}"} dBm)'
+          opdata: 'RX: {ITEM.LASTVALUE1}'
+          priority: WARNING
+          description: Receive power stayed below the threshold for 15 minutes. Also fires while the far end is shut down or unplugged.
+          tags:
+          - tag: scope
+            value: availability
+          - tag: component
+            value: transceiver
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.ports['{#IFINDEX}'].rx[{#LANEIDX}]
+        master_item:
+          key: fs.xcvr.json
+      - uuid: a79010d954d84fcfa33ba4fd6cb1c8ca
+        name: 'Interface {#IFNAME}({#IFALIAS}): Lane {#LANE} TX power'
+        type: DEPENDENT
+        key: fs.xcvr.tx[{#IFNAME},{#LANE}]
+        delay: '0'
+        value_type: FLOAT
+        units: dBm
+        description: Optical transmit power of one lane, measured inside the transceiver.
+        tags:
+        - tag: component
+          value: transceiver
+        - tag: interface
+          value: '{#IFNAME}'
+        - tag: lane
+          value: '{#LANE}'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.ports['{#IFINDEX}'].tx[{#LANEIDX}]
+        master_item:
+          key: fs.xcvr.json
+      master_item:
+        key: fs.xcvr.json
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.lld_lanes
+    - uuid: d7f59ea44be84380a10ddc26d0bc61fd
+      name: Optical port discovery
+      type: DEPENDENT
+      key: fs.xcvr.port.discovery
+      delay: '0'
+      filter:
+        evaltype: AND
+        conditions:
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.MATCHES}'
+          formulaid: A
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.NOT_MATCHES}'
+          operator: NOT_MATCHES_REGEX
+          formulaid: B
+      description: One entry per port whose transceiver reports receive power.
+      item_prototypes:
+      - uuid: 52901ae489244cdb8d021e33c5751b8a
+        name: 'Interface {#IFNAME}({#IFALIAS}): Transceiver temperature'
+        type: DEPENDENT
+        key: fs.xcvr.temp[{#IFNAME}]
+        delay: '0'
+        value_type: FLOAT
+        units: °C
+        description: Module temperature (highest lane reading).
+        tags:
+        - tag: component
+          value: transceiver
+        - tag: interface
+          value: '{#IFNAME}'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.ports['{#IFINDEX}'].temp
+        master_item:
+          key: fs.xcvr.json
+      - uuid: d3bfa0bf023b46acb3f9bd676240e76b
+        name: 'Interface {#IFNAME}({#IFALIAS}): Transceiver serial number'
+        type: DEPENDENT
+        key: fs.xcvr.serial[{#IFNAME}]
+        delay: '0'
+        value_type: CHAR
+        trends: '0'
+        description: Serial number of the plugged module. Stored only to notice replacements; disable this item prototype if serial numbers must not be kept in Zabbix.
+        tags:
+        - tag: component
+          value: transceiver
+        - tag: interface
+          value: '{#IFNAME}'
+        trigger_prototypes:
+        - uuid: 944001d558cd4d398f8dec11fc1750f2
+          expression: last(/FS FSOS Transceiver/fs.xcvr.serial[{#IFNAME}],#1)<>last(/FS FSOS Transceiver/fs.xcvr.serial[{#IFNAME}],#2) and length(last(/FS FSOS Transceiver/fs.xcvr.serial[{#IFNAME}]))>0
+          name: 'Interface {#IFNAME}({#IFALIAS}): Transceiver has been replaced'
+          opdata: 'Serial: {ITEM.LASTVALUE1}'
+          priority: INFO
+          description: The serial number of the module in this port changed. Acknowledge to close manually.
+          manual_close: 'YES'
+          tags:
+          - tag: scope
+            value: notice
+          - tag: component
+            value: transceiver
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.ports['{#IFINDEX}'].sn
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1d
+        master_item:
+          key: fs.xcvr.json
+      master_item:
+        key: fs.xcvr.json
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.lld_ports
+    - uuid: 12064b4e286946e9be2a50674b0f6ae2
+      name: Multi-lane optical port discovery
+      type: DEPENDENT
+      key: fs.xcvr.multilane.discovery
+      delay: '0'
+      filter:
+        evaltype: AND
+        conditions:
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.MATCHES}'
+          formulaid: A
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.NOT_MATCHES}'
+          operator: NOT_MATCHES_REGEX
+          formulaid: B
+      description: Ports with two or more lanes, where lanes can be compared with each other.
+      item_prototypes:
+      - uuid: e85037124b80468eb3117a7080c7ee6c
+        name: 'Interface {#IFNAME}({#IFALIAS}): RX power deviation of weakest lane'
+        type: DEPENDENT
+        key: fs.xcvr.rx.dev[{#IFNAME}]
+        delay: '0'
+        value_type: FLOAT
+        units: dB
+        description: Median receive power of the other lanes minus the weakest lane. Healthy multi-lane links stay well below 1 dB; a single damaged or dirty fibre
+          shows as one lane dropping away from its neighbours.
+        tags:
+        - tag: component
+          value: transceiver
+        - tag: interface
+          value: '{#IFNAME}'
+        trigger_prototypes:
+        - uuid: 0cda352eebdc492f84c2b144ee995932
+          expression: min(/FS FSOS Transceiver/fs.xcvr.rx.dev[{#IFNAME}],15m)>{$FS.XCVR.RX.DEV.HIGH:"{#IFNAME}"}
+          name: 'Interface {#IFNAME}({#IFALIAS}): one optical lane is far weaker than the others (over {$FS.XCVR.RX.DEV.HIGH:"{#IFNAME}"} dB)'
+          opdata: 'Deviation: {ITEM.LASTVALUE1}'
+          priority: AVERAGE
+          description: 'One receive lane is much weaker than the other lanes of the same port. Typical causes: contaminated or badly seated MPO/MTP connector, missing
+            guide pins, damaged fibre. See the item "Weakest RX lane" for the lane number. Forward error correction can hide the resulting bit errors until the margin
+            is gone.'
+          tags:
+          - tag: scope
+            value: performance
+          - tag: component
+            value: transceiver
+        - uuid: 030aa85bbb454ef3a926bfd02c5d5398
+          expression: min(/FS FSOS Transceiver/fs.xcvr.rx.dev[{#IFNAME}],15m)>{$FS.XCVR.RX.DEV.WARN:"{#IFNAME}"} and min(/FS FSOS Transceiver/fs.xcvr.rx.dev[{#IFNAME}],15m)<={$FS.XCVR.RX.DEV.HIGH:"{#IFNAME}"}
+          name: 'Interface {#IFNAME}({#IFALIAS}): one optical lane is weaker than the others (over {$FS.XCVR.RX.DEV.WARN:"{#IFNAME}"} dB)'
+          opdata: 'Deviation: {ITEM.LASTVALUE1}'
+          priority: WARNING
+          description: One receive lane is drifting away from the other lanes of the same port. Inspect and clean the connectors before it gets worse.
+          tags:
+          - tag: scope
+            value: performance
+          - tag: component
+            value: transceiver
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.ports['{#IFINDEX}'].rx_dev
+        master_item:
+          key: fs.xcvr.json
+      - uuid: 2d3296f19ac045f693717c9562b5f97f
+        name: 'Interface {#IFNAME}({#IFALIAS}): Weakest RX lane'
+        type: DEPENDENT
+        key: fs.xcvr.rx.weak[{#IFNAME}]
+        delay: '0'
+        description: Number of the lane with the lowest receive power.
+        tags:
+        - tag: component
+          value: transceiver
+        - tag: interface
+          value: '{#IFNAME}'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.ports['{#IFINDEX}'].rx_weak_lane
+        master_item:
+          key: fs.xcvr.json
+      master_item:
+        key: fs.xcvr.json
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.lld_multilane
+    - uuid: cef9d6f933174680887d64ffe67a9c3b
+      name: Laser bias discovery
+      type: DEPENDENT
+      key: fs.xcvr.bias.discovery
+      delay: '0'
+      filter:
+        evaltype: AND
+        conditions:
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.MATCHES}'
+          formulaid: A
+        - macro: '{#IFNAME}'
+          value: '{$FS.XCVR.IFNAME.NOT_MATCHES}'
+          operator: NOT_MATCHES_REGEX
+          formulaid: B
+      description: One entry per lane with a bias reading and a usable module threshold.
+      item_prototypes:
+      - uuid: 482f76e4bb33444e9fd60745108756c0
+        name: 'Interface {#IFNAME}({#IFALIAS}): Lane {#LANE} laser bias current'
+        type: DEPENDENT
+        key: fs.xcvr.bias[{#IFNAME},{#LANE}]
+        delay: '0'
+        value_type: FLOAT
+        units: mA
+        description: Laser bias current of one lane. An ageing laser needs more current for the same output; the high-warning threshold stored in the module is {#BIAS.HIGH.WARN}
+          mA.
+        tags:
+        - tag: component
+          value: transceiver
+        - tag: interface
+          value: '{#IFNAME}'
+        - tag: lane
+          value: '{#LANE}'
+        trigger_prototypes:
+        - uuid: a6bcd786875f4f1a8388988707937ed7
+          expression: min(/FS FSOS Transceiver/fs.xcvr.bias[{#IFNAME},{#LANE}],15m)>{#BIAS.HIGH.WARN}
+          name: 'Interface {#IFNAME}({#IFALIAS}): Lane {#LANE} laser bias current is high (over {#BIAS.HIGH.WARN} mA)'
+          opdata: 'Bias: {ITEM.LASTVALUE1}'
+          priority: WARNING
+          description: Laser bias current stayed above the module's own high-warning threshold for 15 minutes. Plan a replacement of the transceiver.
+          tags:
+          - tag: scope
+            value: performance
+          - tag: component
+            value: transceiver
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.ports['{#IFINDEX}'].bias[{#LANEIDX}]
+        master_item:
+          key: fs.xcvr.json
+      master_item:
+        key: fs.xcvr.json
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.lld_bias
+    tags:
+    - tag: class
+      value: network
+    - tag: target
+      value: fs-fsos
+    macros:
+    - macro: '{$FS.XCVR.OID}'
+      value: 1.3.6.1.4.1.52642.1.37.1.10
+      description: Base OID of the transceiver tables. Devices answering under the legacy enterprise tree use 1.3.6.1.4.1.27975.37.1.10.
+    - macro: '{$FS.XCVR.RX.DEV.WARN}'
+      value: '1'
+      description: 'Warning: weakest lane this many dB below the median of the other lanes. Supports interface context.'
+    - macro: '{$FS.XCVR.RX.DEV.HIGH}'
+      value: '2'
+      description: 'Average: weakest lane this many dB below the median of the other lanes. Supports interface context.'
+    - macro: '{$FS.XCVR.RX.LOW}'
+      value: '-8'
+      description: 'Warning: absolute receive power below this value in dBm. Supports interface context.'
+    - macro: '{$FS.XCVR.IFNAME.MATCHES}'
+      value: .*
+      description: Discover only interfaces whose name matches this regular expression.
+    - macro: '{$FS.XCVR.IFNAME.NOT_MATCHES}'
+      value: CHANGE_IF_NEEDED
+      description: Skip interfaces whose name matches this regular expression.
