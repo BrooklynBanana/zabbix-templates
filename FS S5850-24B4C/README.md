@@ -2,7 +2,7 @@
 
 Community-maintained monitoring template for the **FS S5850-24B4C** network switch. It combines proprietary SNMP OIDs with a *single* read-only SSH query to monitor hardware health in **Zabbix 7.4**.
 
-> **Compatibility:** Tested by the original contributor on **FS S5850-24B4C**, **FSOS 7.5.5**, **Zabbix 7.4**. Also reported working on **FS S5850-48B8C** with **FSOS 7.4.8**. Other FS switches, firmware releases and Zabbix versions are **not verified**. This is not an official FS.com template.
+> **Compatibility:** Tested by the original contributor on **FS S5850-24B4C**, **FSOS 7.5.5**, **Zabbix 7.4**. Also in service on **FS S5850-48B8C** with **FSOS 7.4.8** (Zabbix 7.4.14), and one installation runs it on **Zabbix 8.0.0** without unsupported items. Other FS switches, firmware releases and Zabbix versions are **not verified**. This is not an official FS.com template.
 
 ## What is monitored
 
@@ -86,7 +86,7 @@ The included test fixture is **synthetic** and contains no real switch identifie
 
 This project was developed with assistance from **OpenAI ChatGPT**, including analysis of SNMP OIDs, template design, JavaScript preprocessing, documentation, and regression tests. The original contributor configured and tested the monitoring setup on a physical FS S5850-24B4C running FSOS 7.5.5 with Zabbix 7.4. The template was later also put into service on FS S5850-48B8C switches running FSOS 7.4.8.
 
-The improved parser in this repository has been validated with synthetic tests but has **not yet been retested against the physical switch**. All AI-assisted contributions should be reviewed and tested in the target environment before production use. This is an independent community project, not an official product of or endorsed by FS.com, Zabbix, or OpenAI.
+The improved parser in this repository is covered by synthetic tests and has since been run live on FS S5850-48B8C switches (FSOS 7.4.8, Zabbix 7.4.14), imported from this repository's XML. A retest on the S5850-24B4C itself, on which the original parser was tested, is still outstanding. All AI-assisted contributions should be reviewed and tested in the target environment before production use. This is an independent community project, not an official product of or endorsed by FS.com, Zabbix, or OpenAI.
 
 ## License
 

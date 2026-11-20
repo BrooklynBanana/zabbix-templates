@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.2] - 2026-11-20
+
+- Documentation only: the improved parser has been run live on FS S5850-48B8C (FSOS 7.4.8, Zabbix 7.4.14), imported from this repository's XML. One installation runs the template on Zabbix 8.0.0. A retest on the S5850-24B4C itself is still outstanding. No functional change.
+
 ## [0.1.1] - 2026-11-20
 
 - Documentation only: also reported working on FS S5850-48B8C with FSOS 7.4.8, which prints the same `show environment` layout and temperature limits. No functional change; item keys and UUIDs are unchanged.
